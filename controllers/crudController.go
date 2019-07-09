@@ -1,10 +1,12 @@
 package controllers
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gocql/gocql"
@@ -27,25 +29,55 @@ func (c *CrudController) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/{app}/{entity}/{id}", c.DeleteEntity).Methods("DELETE")
 	router.HandleFunc("/{app}/{entity}/{id}", c.GetEntity).Methods("GET")
 	router.HandleFunc("/{app}/{entity}", c.GetEntities).Methods("GET")
+	//.Queries("size", "{size:[0-9]+}", "token", "{token:*+}")
 	router.HandleFunc("/{app}/{entity}/{id}", c.UpdateEntity).Methods("PUT")
 }
 
 func (c *CrudController) GetEntities(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
+	// vals := r.URL.Query()
 	app := vars["app"]
 	entity := vars["entity"]
 
+	size := 10
+	var token []byte
+	pageSize := r.URL.Query().Get("size")
+	pagingToken := r.URL.Query().Get("token")
+	// if they pass in a custom size convert it to an int
+	if pageSize != "" {
+		var err error
+		size, err = strconv.Atoi(pageSize)
+		if err != nil {
+			fmt.Println("Error with page size input")
+		}
+	}
+	// if there is a token convert it to a byte array
+	if pagingToken != "" {
+		var err error
+		token, err = base64.URLEncoding.DecodeString(pagingToken)
+		if err != nil {
+			fmt.Println("Error Decoding Paging Token")
+		}
+	}
+
 	//TODO errors around getting app and entity
 	query := c.session.Query("SELECT * FROM " + app + "." + entity + ";")
-	iter := query.Iter()
+
+	paginated := query.PageState(token).PageSize(size)
+	iter := paginated.Iter()
 	res := []map[string]interface{}{}
-	m := &map[string]interface{}{}
+	row := &map[string]interface{}{}
 	//scan items into a map
-	for iter.MapScan(*m) {
+	for iter.MapScan(*row) {
 		//fmt.Println(m)
-		res = append(res, *m)
-		m = &map[string]interface{}{}
+		res = append(res, *row)
+		row = &map[string]interface{}{}
 	}
+
+	//get page state to return in header
+	resPagingToken := iter.PageState()
+	retPagingToken := base64.URLEncoding.EncodeToString(resPagingToken)
+
 	// marshall result into json fomat
 	jsonRes, err := json.Marshal(res)
 	if err != nil {
@@ -53,6 +85,7 @@ func (c *CrudController) GetEntities(w http.ResponseWriter, r *http.Request) {
 		log.Fatal(err)
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Paging-Token", retPagingToken)
 	w.WriteHeader(http.StatusOK)
 	w.Write(jsonRes)
 }
