@@ -24,5 +24,5 @@ then run
 
 ## this might be a way to just change the app file
 
-`docker-compose build web`
+`docker kill crud-stash_web_1`
 `docker-compose up -d --no-deps --build web`

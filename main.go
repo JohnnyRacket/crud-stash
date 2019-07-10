@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/gorilla/mux"
 )
@@ -15,7 +14,7 @@ import (
 func main() {
 
 	fmt.Println("about to wait print")
-	time.Sleep(time.Duration(180) * time.Second)
+	//time.Sleep(time.Duration(180) * time.Second)
 	//test cassandra connection
 	fmt.Println("done waiting gonna test demo thing")
 	session := data.Test()
