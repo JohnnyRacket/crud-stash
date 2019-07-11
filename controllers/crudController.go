@@ -95,38 +95,19 @@ func (c *CrudController) CreateEntity(w http.ResponseWriter, r *http.Request) {
 	entity := vars["entity"]
 
 	// fetch metadata about table to know how to input the data; i.e. if we need quotes or not
-	meta := "select column_name,type from system_schema.columns where keyspace_name ='" + app + "' AND table_name='" + entity + "';"
-	metaQuery := c.session.Query(meta)
-	iter := metaQuery.Iter()
-	var columnName string
-	var columnType string
-	metadata := map[string]string{}
-	//scan items into a map
-	for iter.Scan(&columnName, &columnType) {
-		metadata[columnName] = columnType
-	}
-	fmt.Println(metadata)
+	metadata := c.getMetadata(app, entity)
 
 	decoder := json.NewDecoder(r.Body)
 	input := map[string]interface{}{}
 	err := decoder.Decode(&input)
 	if err != nil {
-		panic(err)
+		http.Error(w, "Error Decoding Body.", 500)
 	}
-	// log.Println(input)
+
 	// get the keys and values from the body
-	keys := make([]string, 0, len(input))
-	values := make([]string, 0, len(input))
-	for key := range input {
-		keys = append(keys, key)
-		if metadata[key] != "text" {
-			values = append(values, input[key].(string))
-		} else {
-			values = append(values, "'"+input[key].(string)+"'")
-		}
-	}
+	keys, values := c.formatForCQL(input, metadata)
 	// build a query string using them
-	query := "INSERT INTO example.tweet (" + strings.Join(keys, ", ") + ") VALUES (" + strings.Join(values, ", ") + ");"
+	query := "INSERT INTO " + app + "." + entity + " (" + strings.Join(keys, ", ") + ") VALUES (" + strings.Join(values, ", ") + ");"
 	fmt.Println(query)
 
 	err = c.session.Query(query).Exec()
@@ -159,7 +140,48 @@ func (c *CrudController) DeleteEntity(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *CrudController) UpdateEntity(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	app := vars["app"]
+	entity := vars["entity"]
+	id := vars["id"]
 
+	// fetch metadata about table to know how to input the data; i.e. if we need quotes or not
+	metadata := c.getMetadata(app, entity)
+
+	decoder := json.NewDecoder(r.Body)
+	input := map[string]interface{}{}
+	err := decoder.Decode(&input)
+	if err != nil {
+		http.Error(w, "Error Decoding Body.", 500)
+	}
+
+	//remove id if it is passed in (cant update primary key)
+	input = c.filterPrimaryKey(input)
+
+	// get the keys and values from the body
+	keys, values := c.formatForCQL(input, metadata)
+
+	// build update string
+	updates := make([]string, len(keys))
+	fmt.Println(keys)
+	for i := range keys {
+		updates[i] = (keys[i] + " = " + values[i])
+	}
+	updatesQuery := strings.Join(updates, ", ")
+	fmt.Println(updatesQuery)
+
+	// build a query string using them
+	query := "UPDATE " + app + "." + entity + " SET " + updatesQuery + "WHERE id = " + id + ";"
+	fmt.Println(query)
+
+	err = c.session.Query(query).Exec()
+	if err != nil {
+		log.Println(err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 }
 
 func (c *CrudController) GetEntity(w http.ResponseWriter, r *http.Request) {
@@ -188,4 +210,46 @@ func (c *CrudController) GetEntity(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(jsonRes)
+}
+
+func (c *CrudController) getMetadata(app string, entity string) map[string]string {
+	// fetch metadata about table to know how to input the data; i.e. if we need quotes or not
+	meta := "select column_name,type from system_schema.columns where keyspace_name ='" + app + "' AND table_name='" + entity + "';"
+	metaQuery := c.session.Query(meta)
+	iter := metaQuery.Iter()
+	var columnName string
+	var columnType string
+	metadata := map[string]string{}
+	//scan items into a map
+	for iter.Scan(&columnName, &columnType) {
+		metadata[columnName] = columnType
+	}
+	fmt.Println(metadata)
+	return metadata
+}
+
+func (c *CrudController) formatForCQL(input map[string]interface{}, metadata map[string]string) ([]string, []string) {
+	// get the keys and values from the body
+	keys := make([]string, 0, len(input))
+	values := make([]string, 0, len(input))
+	for key := range input {
+		keys = append(keys, key)
+		if metadata[key] != "text" {
+			values = append(values, input[key].(string))
+		} else {
+			values = append(values, "'"+input[key].(string)+"'")
+		}
+	}
+	return keys, values
+}
+
+func (c *CrudController) filterPrimaryKey(input map[string]interface{}) map[string]interface{} {
+	filteredInput := make(map[string]interface{})
+
+	for key, value := range input {
+		if key != "id" {
+			filteredInput[key] = value
+		}
+	}
+	return filteredInput
 }
